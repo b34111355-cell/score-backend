@@ -18,12 +18,11 @@ async function getSheetsClient() {
   return google.sheets({ version: 'v4', auth });
 }
 
-// 健康檢查
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, time: new Date().toISOString() });
 });
 
-// 接收整場比賽的同步 API (覆蓋模式，防止重複)
+// 接收整場比賽的同步 API (修正版)
 app.post('/api/syncMatch', async (req, res) => {
   const { passcode, matchData } = req.body;
 
@@ -41,6 +40,15 @@ app.post('/api/syncMatch', async (req, res) => {
     const matchId = matchData.id;
     const config = matchData.config;
 
+    // 先取得兩個分頁的 sheetId (優化效能並避免 bug)
+    const spreadsheetInfo = await sheets.spreadsheets.get({ spreadsheetId });
+    const pdSheet = spreadsheetInfo.data.sheets.find(s => s.properties.title === 'Point_Details');
+    const msSheet = spreadsheetInfo.data.sheets.find(s => s.properties.title === 'Match_Summary');
+
+    if (!pdSheet || !msSheet) {
+      throw new Error('找不到 Point_Details 或 Match_Summary 分頁，請確認名稱是否完全正確');
+    }
+
     // ==========================================
     // 1. 清除 Point_Details 中該場比賽的舊資料
     // ==========================================
@@ -48,19 +56,14 @@ app.post('/api/syncMatch', async (req, res) => {
     const pdRows = pdRes.data.values || [];
     const pdIndicesToDelete = [];
     
-    // 找出該 matchId 的所有列號 (索引+1 是因為 row 從 1 開始)
-    pdRows.forEach((row, idx) => {
-      if (row[1] === matchId && idx > 0) { // 跳過標題列
-        pdIndicesToDelete.push({ deleteDimension: { range: { sheetId: await getSheetId(sheets, spreadsheetId, 'Point_Details'), dimension: 'ROWS', startIndex: idx, endIndex: idx + 1 } } });
+    for (let i = pdRows.length - 1; i > 0; i--) { // 從下往上找
+      if (pdRows[i][1] === matchId) {
+        pdIndicesToDelete.push({ deleteDimension: { range: { sheetId: pdSheet.properties.sheetId, dimension: 'ROWS', startIndex: i, endIndex: i + 1 } } });
       }
-    });
+    }
     
-    // 如果有找到舊資料，從最下面往上刪除 (才不會影響到列號)
     if (pdIndicesToDelete.length > 0) {
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId,
-        requestBody: { requests: pdIndicesToDelete.reverse() }
-      });
+      await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests: pdIndicesToDelete } });
     }
 
     // ==========================================
@@ -70,17 +73,14 @@ app.post('/api/syncMatch', async (req, res) => {
     const msRows = msRes.data.values || [];
     const msIndicesToDelete = [];
     
-    msRows.forEach((row, idx) => {
-      if (row[1] === matchId && idx > 0) {
-        msIndicesToDelete.push({ deleteDimension: { range: { sheetId: await getSheetId(sheets, spreadsheetId, 'Match_Summary'), dimension: 'ROWS', startIndex: idx, endIndex: idx + 1 } } });
+    for (let i = msRows.length - 1; i > 0; i--) {
+      if (msRows[i][1] === matchId) {
+        msIndicesToDelete.push({ deleteDimension: { range: { sheetId: msSheet.properties.sheetId, dimension: 'ROWS', startIndex: i, endIndex: i + 1 } } });
       }
-    });
+    }
     
     if (msIndicesToDelete.length > 0) {
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId,
-        requestBody: { requests: msIndicesToDelete.reverse() }
-      });
+      await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests: msIndicesToDelete } });
     }
 
     // ==========================================
@@ -93,7 +93,6 @@ app.post('/api/syncMatch', async (req, res) => {
     matchData.points.forEach(p => { if (p.winnerTeam === 0) scoreA++; else scoreB++; });
     const winnerTeamName = scoreA > scoreB ? nameA : nameB;
 
-    // 寫入 Match_Summary
     await sheets.spreadsheets.values.append({
       spreadsheetId,
       range: 'Match_Summary!A:H',
@@ -101,7 +100,6 @@ app.post('/api/syncMatch', async (req, res) => {
       requestBody: { values: [[now, matchId, config.mode === 'doubles' ? '雙打' : '單打', nameA, nameB, winnerTeamName, scoreA, scoreB]] },
     });
 
-    // 寫入 Point_Details
     const pointValues = [];
     for (const p of matchData.points) {
       const isSvTeamA = p.serverIdx < 2;
@@ -126,17 +124,10 @@ app.post('/api/syncMatch', async (req, res) => {
 
     res.json({ ok: true, matchId: matchData.id, revision: matchData.revision });
   } catch (err) {
-    console.error('寫入失敗:', err.message);
-    res.status(500).json({ error: '寫入試算表失敗' });
+    console.error('🔴 寫入失敗原因:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
-
-// 輔助函式：取得分頁的 Sheet ID
-async function getSheetId(sheets, spreadsheetId, sheetName) {
-  const res = await sheets.spreadsheets.get({ spreadsheetId });
-  const sheet = res.data.sheets.find(s => s.properties.title === sheetName);
-  return sheet ? sheet.properties.sheetId : 0;
-}
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
