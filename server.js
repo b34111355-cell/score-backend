@@ -54,6 +54,42 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, time: new Date().toISOString() });
 });
 
+// 接收整場比賽的同步 API
+app.post('/api/syncMatch', async (req, res) => {
+  const { passcode, matchData } = req.body;
+
+  if (!passcode || passcode !== process.env.TEAM_PASSCODE) {
+    return res.status(401).json({ error: '通行碼錯誤' });
+  }
+  if (!matchData) {
+    return res.status(400).json({ error: '缺少 matchData' });
+  }
+
+  try {
+    const sheets = await getSheetsClient();
+    const range = `${process.env.SHEET_NAME}!A:D`;
+    
+    const values = [[
+      new Date().toISOString(),
+      matchData.id,
+      matchData.points ? matchData.points.length : 0,
+      JSON.stringify(matchData)
+    ]];
+
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: process.env.SPREADSHEET_ID,
+      range,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values },
+    });
+
+    res.json({ ok: true, matchId: matchData.id, revision: matchData.revision });
+  } catch (err) {
+    console.error('寫入失敗:', err.message);
+    res.status(500).json({ error: '寫入試算表失敗' });
+  }
+});
+
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Score backend listening on http://localhost:${port}`);
