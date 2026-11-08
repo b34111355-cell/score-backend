@@ -45,7 +45,7 @@ app.post('/api/syncMatch', async (req, res) => {
 
     if (!pdSheet || !msSheet) throw new Error('找不到對應分頁');
 
-    // 清除 Point_Details 舊資料
+    // 清除舊資料 (Point_Details)
     const pdRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Point_Details!A:B' });
     const pdRows = pdRes.data.values || [];
     const pdIndicesToDelete = [];
@@ -54,7 +54,7 @@ app.post('/api/syncMatch', async (req, res) => {
     }
     if (pdIndicesToDelete.length > 0) await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests: pdIndicesToDelete } });
 
-    // 清除 Match_Summary 舊資料
+    // 清除舊資料 (Match_Summary)
     const msRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Match_Summary!A:B' });
     const msRows = msRes.data.values || [];
     const msIndicesToDelete = [];
@@ -78,7 +78,7 @@ app.post('/api/syncMatch', async (req, res) => {
       requestBody: { values: [[now, matchId, config.mode === 'doubles' ? '雙打' : '單打', nameA, nameB, winnerTeamName, scoreA, scoreB]] },
     });
 
-    // 寫入 Point_Details (擴充到 L 欄)
+    // 寫入 Point_Details (擴充到 M 欄)
     const pointValues = [];
     for (const p of matchData.points) {
       const isSvTeamA = p.serverIdx < 2;
@@ -89,20 +89,24 @@ app.post('/api/syncMatch', async (req, res) => {
       const isWinner = (p.winnerTeam === 0) === isSvTeamA;
       const typeMap = { ace: 'Ace', df: '雙誤', serve_winner: '發球直得', winner: '製勝分', return_winner: '接發製勝', ue: '非受迫失誤', fe: '受迫失誤' };
 
+      // 取得壓迫者名字 (如果有)
+      const forcerName = p.forcerIdx !== undefined && p.forcerIdx !== -1 ? config.names[p.forcerIdx] : '';
+
       pointValues.push([
         now, matchId, config.mode === 'doubles' ? '雙打' : '單打', 
         serverName, receiverName, p.firstServeIn ? '是' : '否', 
         winnerTeamName, typeMap[p.endingType] || p.endingType, 
         endingPlayerName, isWinner ? '發球方得分' : '接發方得分',
         p.rallyLength || '5-8',
-        p.isNetPlay ? '是' : '否' // L欄：網前
+        p.isNetPlay ? '是' : '否',
+        forcerName // 第 13 欄 (M欄)
       ]);
     }
 
     if (pointValues.length > 0) {
       await sheets.spreadsheets.values.append({
         spreadsheetId,
-        range: 'Point_Details!A:L',
+        range: 'Point_Details!A:M', // 擴充到 M 欄
         valueInputOption: 'USER_ENTERED',
         requestBody: { values: pointValues },
       });
@@ -130,12 +134,12 @@ app.get('/api/allData', async (req, res) => {
       scoreA: parseInt(row[6]) || 0, scoreB: parseInt(row[7]) || 0
     }));
 
-    const pdRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Point_Details!A:L' });
+    const pdRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Point_Details!A:M' });
     const pdRows = pdRes.data.values || [];
     const points = pdRows.slice(1).map(row => ({
       time: row[0], matchId: row[1], mode: row[2], server: row[3], receiver: row[4], firstServeIn: row[5] === '是',
       winnerTeam: row[6], endingType: row[7], player: row[8], pointWinner: row[9], rallyLength: row[10] || '5-8',
-      isNetPlay: row[11] === '是' || row[11] === true // 讀取 L 欄
+      isNetPlay: row[11] === '是' || row[11] === true, forcer: row[12] || ''
     }));
 
     res.json({ ok: true, matches, points });
