@@ -231,6 +231,7 @@ app.get('/api/allData', async (req, res) => {
         time: row[0], matchId: row[1], mode: row[2], teamA: row[3], teamB: row[4], winner: row[5],
         scoreA: parseInt(row[6]) || 0, scoreB: parseInt(row[7]) || 0,
         revision: parseInt(row[8]) || 0,
+        updatedAt: row[13] || row[0], // 最後一次同步的時間，用來判斷比賽是不是還有人在記
         isForcedEnd: isYesCell(row[9]),
         isDraw: isYesCell(row[10]) || row[5] === '平局',
       };
